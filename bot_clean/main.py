@@ -7,6 +7,8 @@ import asyncio
 import traceback
 import logging
 import importlib.util
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 
 try:
     import discord
@@ -21,7 +23,15 @@ commands = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(commands)
 
 LOG = logging.getLogger('ratking_clean')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+log_file = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'ratking_bot_clean.log'))
+handler = RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=3, encoding='utf-8')
+handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+LOG.setLevel(logging.INFO)
+LOG.addHandler(handler)
+# also log to stdout
+console = logging.StreamHandler(sys.stdout)
+console.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+LOG.addHandler(console)
 
 PREFIX = commands.DEFAULT_PREFIX
 
@@ -32,12 +42,35 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+heartbeat_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'ratking_heartbeat.txt'))
+
+
+def _write_heartbeat():
+    try:
+        with open(heartbeat_path, 'w', encoding='utf-8') as f:
+            f.write(f'OK {datetime.utcnow().isoformat()}')
+    except Exception:
+        LOG.exception('Failed to write heartbeat')
+
+
+async def _heartbeat_loop(interval: int = 60):
+    while True:
+        _write_heartbeat()
+        await asyncio.sleep(interval)
+
 
 @client.event
 async def on_ready():
     # Print identity and flush
     msg = f"Logged in as {client.user} (id={client.user.id})"
     print(msg, flush=True)
+    LOG.info(msg)
+    _write_heartbeat()
+    # start background heartbeat task
+    try:
+        client.loop.create_task(_heartbeat_loop(60))
+    except Exception:
+        LOG.exception('Failed to start heartbeat loop')
 
 
 @client.event
@@ -99,6 +132,7 @@ async def on_message(message):
         if resp:
             await message.channel.send(resp)
     except Exception as e:
+        LOG.exception('handler exception')
         print('handler exception:', e)
         traceback.print_exc()
 
@@ -108,10 +142,12 @@ def main():
     if not token:
         print('Missing DISCORD_BOT_TOKEN environment variable. Aborting.', flush=True)
         return
+    LOG.info('Starting bot (connecting...)')
     print('Starting bot (connecting...)', flush=True)
     try:
         client.run(token)
     except Exception:
+        LOG.exception('client.run failed')
         traceback.print_exc()
 
 
