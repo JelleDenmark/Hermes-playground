@@ -1,0 +1,13 @@
+{
+  "!greeting": "hello",
+  "!echo": {
+    "response": "You said: {args}",
+    "match": "exact",
+    "rate_limit": 3
+  },
+  "!say": {
+    "response": "I hear: {0}",
+    "match": "regex",
+    "pattern": "^say\\s+(.+)$"
+  }
+}
