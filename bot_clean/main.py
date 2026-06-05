@@ -16,11 +16,14 @@ except Exception:
     print("discord.py not installed")
     raise
 
-# Load commands module by path to avoid package import issues when running as script
-commands_path = os.path.join(os.path.dirname(__file__), 'commands.py')
-_spec = importlib.util.spec_from_file_location('bot_clean.commands', commands_path)
+# Load commands module from repo root commands.py
+commands_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'commands.py'))
+_spec = importlib.util.spec_from_file_location('ratking.commands', commands_path)
 commands = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(commands)
+
+# Health checks module
+from bot_clean.health import Health
 
 LOG = logging.getLogger('ratking_clean')
 log_file = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'ratking_bot_clean.log'))
@@ -43,6 +46,10 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 heartbeat_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'ratking_heartbeat.txt'))
+log_path = log_file
+
+# instantiate health manager
+health = Health(heartbeat_path=heartbeat_path, log_path=log_path, commands_module=commands)
 
 
 def _write_heartbeat():
@@ -59,6 +66,20 @@ async def _heartbeat_loop(interval: int = 60):
         await asyncio.sleep(interval)
 
 
+async def _start_health_server(host: str = '127.0.0.1', port: int = 8080, prefix: str = ''):
+    try:
+        from aiohttp import web
+    except Exception:
+        LOG.info('aiohttp not installed; health HTTP server disabled')
+        return
+    app = health.make_aiohttp_app(prefix=prefix)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host=host, port=port)
+    await site.start()
+    LOG.info(f'Health server listening on http://{host}:{port}{prefix}/ready and /health')
+
+
 @client.event
 async def on_ready():
     # Print identity and flush
@@ -71,6 +92,14 @@ async def on_ready():
         client.loop.create_task(_heartbeat_loop(60))
     except Exception:
         LOG.exception('Failed to start heartbeat loop')
+    # start HTTP health server in the bot loop if requested
+    health_port = int(os.getenv('HEALTH_PORT', '8080'))
+    health_host = os.getenv('HEALTH_HOST', '127.0.0.1')
+    health_prefix = os.getenv('HEALTH_PREFIX', '')
+    try:
+        client.loop.create_task(_start_health_server(host=health_host, port=health_port, prefix=health_prefix))
+    except Exception:
+        LOG.exception('Failed to start health server')
 
 
 @client.event
@@ -114,6 +143,13 @@ async def on_message(message):
                 await message.channel.send(f'Command {PREFIX}{name} not found')
             return
 
+        # status command
+        if content == f"{PREFIX}status":
+            st = health.get_ready_status()
+            lines = [f"{k}: {v}" for k, v in st.items()]
+            await message.channel.send('Status:\n' + '\n'.join(lines))
+            return
+
         # dynamic help: always build from live commands to avoid stale help
         if content == f"{PREFIX}help":
             cmds = commands.list_commands()
@@ -142,6 +178,14 @@ def main():
     if not token:
         print('Missing DISCORD_BOT_TOKEN environment variable. Aborting.', flush=True)
         return
+
+    # run startup self-checks
+    ok = health.run_self_checks()
+    if not ok:
+        LOG.error('Startup self-checks failed: %s', health.get_ready_status())
+    else:
+        LOG.info('Startup self-checks passed')
+
     LOG.info('Starting bot (connecting...)')
     print('Starting bot (connecting...)', flush=True)
     try:
