@@ -9,5 +9,7 @@
     "response": "I hear: {0}",
     "match": "regex",
     "pattern": "^say\\s+(.+)$"
-  }
+  },
+  "!ping": "pong",
+  "!help": "Available commands: !greeting, !echo, !say, !ping, !commands, !startready, !ready, !readylist, !createevent, !signup, !signups, !events, !addcmd"
 }
