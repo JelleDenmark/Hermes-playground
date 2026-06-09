@@ -143,24 +143,17 @@ def _save_commands() -> None:
 _load_commands()
 
 
-# File watcher thread: polls mtime and reloads if changed
-def _watcher_loop(poll_interval: float = 1.0):
-    last_mtime = _commands_file.stat().st_mtime if _commands_file.exists() else None
-    while True:
-        try:
-            if _commands_file.exists():
-                mtime = _commands_file.stat().st_mtime
-                if last_mtime is None or mtime != last_mtime:
-                    _load_commands()
-                    last_mtime = mtime
-        except Exception:
-            # ignore transient FS errors
-            pass
-        time.sleep(poll_interval)
+def reload_commands() -> bool:
+    """Explicit API to reload commands from the backing JSON file.
 
+    Returns True on success, False on failure.
+    """
+    try:
+        _load_commands()
+        return True
+    except Exception:
+        return False
 
-_watcher_thread = threading.Thread(target=_watcher_loop, daemon=True, name='ratking-cmd-watcher')
-_watcher_thread.start()
 
 
 # Public API
@@ -221,9 +214,13 @@ def parse_message(content: str) -> Optional[Tuple[str, List[str], str]]:
     if not content:
         return None
     text = content.strip()
-    if not text.startswith(DEFAULT_PREFIX):
+    # Accept either the default prefix (e.g. '!') or a leading '/'
+    if not (text.startswith(DEFAULT_PREFIX) or text.startswith('/')):
         return None
-    after = text[len(DEFAULT_PREFIX):].lstrip()
+    if text.startswith(DEFAULT_PREFIX):
+        after = text[len(DEFAULT_PREFIX):].lstrip()
+    else:
+        after = text[1:].lstrip()
     if not after:
         return None
     parts = after.split()
